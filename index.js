@@ -13,13 +13,17 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.launchApp = void 0;
-// import { PluginImportType, PluginImportAction } from "@hyperledger/cactus-core-api";
+const cactus_core_api_1 = require("@hyperledger/cactus-core-api");
+const cactus_core_api_2 = require("@hyperledger/cactus-core-api");
+const uuid4_1 = __importDefault(require("uuid4"));
 const cactus_cmd_api_server_1 = require("@hyperledger/cactus-cmd-api-server");
 const cactus_cmd_api_server_2 = require("@hyperledger/cactus-cmd-api-server");
 const cactus_common_1 = require("@hyperledger/cactus-common");
 const express_1 = __importDefault(require("express"));
 const dotenv_1 = __importDefault(require("dotenv"));
-const http_1 = require("http");
+const body_parser_1 = __importDefault(require("body-parser"));
+const cactus_plugin_keychain_memory_1 = require("@hyperledger/cactus-plugin-keychain-memory");
+const cors_1 = __importDefault(require("cors"));
 const log = cactus_common_1.LoggerProvider.getOrCreate({
     label: "cactus-api",
     level: "INFO",
@@ -31,36 +35,100 @@ const main = () => __awaiter(void 0, void 0, void 0, function* () {
     // If there is no configuration file on the file system, just set it to empty string
     apiServerOptions.configFile = "";
     // Enable CORS for
-    apiServerOptions.apiCorsDomainCsv = "your.domain.example.com";
     apiServerOptions.authorizationProtocol = "NONE";
-    apiServerOptions.apiPort = 3000;
+    apiServerOptions.apiPort = 3001;
     apiServerOptions.cockpitPort = 3100;
     apiServerOptions.grpcPort = 5000;
+    apiServerOptions.plugins = [
+        //   // hyperledger cactus add plugin keychain-aws-sm
+        {
+            packageName: "@hyperledger/cactus-plugin-keychain-memory",
+            type: cactus_core_api_2.PluginImportType.Remote,
+            action: cactus_core_api_1.PluginImportAction.Install,
+            options: {
+                instanceId: (0, uuid4_1.default)(),
+                keychainId: (0, uuid4_1.default)(),
+            },
+        },
+    ];
     // Disble TLS (or provide TLS certs for secure HTTP if you are deploying to production)
-    apiServerOptions.apiTlsEnabled = true;
-    apiServerOptions.plugins = [];
+    apiServerOptions.apiTlsEnabled = false;
     const config = yield configService.newExampleConfigConvict(apiServerOptions);
-    const app = (0, express_1.default)();
-    const port = process.env.PORT;
-    app.get('/', (req, res) => {
+    const apiServer = new cactus_cmd_api_server_1.ApiServer({
+        config: config.getProperties(),
+    });
+    // start the API server here and you are ready to roll
+    apiServer.start();
+});
+const app = (0, express_1.default)();
+app.use((0, cors_1.default)());
+const port = process.env.PORT;
+app.use(body_parser_1.default.json());
+app.use(body_parser_1.default.urlencoded({ extended: true }));
+const client = () => __awaiter(void 0, void 0, void 0, function* () {
+    const apiClient = new cactus_plugin_keychain_memory_1.PluginKeychainMemory({
+        instanceId: (0, uuid4_1.default)(),
+        keychainId: (0, uuid4_1.default)(),
+        logLevel: "INFO",
+    });
+    // Example: To set a key,value pair
+    app.post("/set-kcm", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        const key = req.body.key;
+        const value = req.body.value;
+        try {
+            yield apiClient.set(key, value);
+            res.status(201).end();
+        }
+        catch (err) {
+            res.status(404).send(err);
+        }
+    }));
+    // get a key value pair
+    app.get("/get-kcm/:key", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { key } = req.params;
+            const response = yield apiClient.get(key);
+            res.end(response);
+        }
+        catch (err) {
+            res.status(404).send(err);
+        }
+    }));
+    // delete key value pair
+    app.delete('/delete-kcm/:key', (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { key } = req.params;
+            yield apiClient.delete(key);
+            res.status(200).end();
+        }
+        catch (err) {
+            res.status(404).send(err);
+        }
+    }));
+    // check if key exists
+    app.get("/has-key/:key", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+        try {
+            const { key } = req.params;
+            const response = yield apiClient.has(key);
+            res.status(200).send(response);
+        }
+        catch (err) {
+            res.status(404).send(err);
+        }
+    }));
+    app.get("/", (req, res) => {
         log.info("Cactus: Hello World");
-        res.send('Hello World - Server!');
+        res.send("Hello World - Server!");
     });
     app.listen(port, () => {
         console.log(`Example app listening on port ${port}`);
     });
-    const httpServerApi = (0, http_1.createServer)(app);
-    const apiServer = new cactus_cmd_api_server_1.ApiServer({
-        config: config.getProperties(),
-        httpServerApi
-    });
-    // start the API server here and you are ready to roll
-    apiServer.start();
 });
 function launchApp() {
     return __awaiter(this, void 0, void 0, function* () {
         try {
             yield main();
+            yield client();
             log.info(`Cactus API server launched OK `);
         }
         catch (ex) {
